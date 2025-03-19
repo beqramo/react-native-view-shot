@@ -306,24 +306,41 @@ public class ViewShot implements UIBlock {
 
     @NonNull
     private List<View> getAllChildren(@NonNull final View v) {
-        if (!(v instanceof ViewGroup)) {
-            final ArrayList<View> viewArrayList = new ArrayList<>();
-            viewArrayList.add(v);
+        try {
+            if (!(v instanceof ViewGroup)) {
+                final ArrayList<View> viewArrayList = new ArrayList<>();
+                viewArrayList.add(v);
 
-            return viewArrayList;
+                return viewArrayList;
+            }
+
+            final ArrayList<View> result = new ArrayList<>();
+
+            ViewGroup viewGroup = (ViewGroup) v;
+            for (int i = 0; i < viewGroup.getChildCount(); i++) {
+                try {
+                    View child = viewGroup.getChildAt(i);
+                    if (child != null) {
+                        //Do not add any parents, just add child elements
+                        try {
+                            result.addAll(getAllChildren(child));
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error getting children of view: " + e.getMessage(), e);
+                            // Add just this child if we can't get its children
+                            result.add(child);
+                        }
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error getting child at index " + i + ": " + e.getMessage(), e);
+                }
+            }
+
+            return result;
+        } catch (Exception e) {
+            Log.e(TAG, "Error in getAllChildren: " + e.getMessage(), e);
+            // Return an empty list to prevent null pointer exceptions
+            return new ArrayList<>();
         }
-
-        final ArrayList<View> result = new ArrayList<>();
-
-        ViewGroup viewGroup = (ViewGroup) v;
-        for (int i = 0; i < viewGroup.getChildCount(); i++) {
-            View child = viewGroup.getChildAt(i);
-
-            //Do not add any parents, just add child elements
-            result.addAll(getAllChildren(child));
-        }
-
-        return result;
     }
 
     /**
@@ -389,13 +406,21 @@ public class ViewShot implements UIBlock {
                     }
                 } catch (Exception e) {
                     Log.e(TAG, "Error calculating ViewGroup content height: " + e.getMessage());
-                    // Continue with original height if calculation fails
+                    // Continue with original height if measurement fails
                 }
             }
 
-            final Point resolution = new Point(w, h);
-            final Bitmap bitmap = getBitmapForScreenshot(w, h);
-            final Canvas canvas = new Canvas(bitmap);
+            Point resolution = new Point(w, h);
+            Bitmap bitmap = null;
+            Canvas canvas = null;
+
+            try {
+                bitmap = getBitmapForScreenshot(w, h);
+                canvas = new Canvas(bitmap);
+            } catch (Exception e) {
+                Log.e(TAG, "Error creating bitmap or canvas: " + e.getMessage(), e);
+                return resolution; // Return early with just the resolution
+            }
 
             // Use a flag to track if we've already rendered the view
             boolean viewAlreadyRendered = false;
@@ -411,21 +436,42 @@ public class ViewShot implements UIBlock {
 
                         try {
                             // Use a solid white background instead of transparent
-                            canvas.drawColor(Color.WHITE);
+                            try {
+                                canvas.drawColor(Color.WHITE);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error drawing background color: " + e.getMessage(), e);
+                            }
 
                             // Reset scroll position for capture
                             scrollView.setScrollY(0);
 
                             // Simple approach: Translate and draw directly
-                            canvas.save();
+                            int saveCount = 0;
+                            try {
+                                saveCount = canvas.save();
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error saving canvas state: " + e.getMessage(), e);
+                            }
 
-                            // Apply padding offset
-                            canvas.translate(scrollView.getPaddingLeft(), scrollView.getPaddingTop());
+                            try {
+                                // Apply padding offset
+                                canvas.translate(scrollView.getPaddingLeft(), scrollView.getPaddingTop());
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error translating canvas: " + e.getMessage(), e);
+                            }
 
-                            // Draw just the content without any decoration
-                            content.draw(canvas);
+                            try {
+                                // Draw just the content without any decoration
+                                content.draw(canvas);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error drawing content: " + e.getMessage(), e);
+                            }
 
-                            canvas.restore();
+                            try {
+                                canvas.restore();
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error restoring canvas state: " + e.getMessage(), e);
+                            }
 
                             // Mark that we've already rendered the view
                             viewAlreadyRendered = true;
@@ -434,18 +480,30 @@ public class ViewShot implements UIBlock {
                             Log.d(TAG, "ScrollView capture complete using simplified approach");
                         } finally {
                             // Always restore original scroll position
-                            scrollView.setScrollY(originalScrollY);
+                            try {
+                                scrollView.setScrollY(originalScrollY);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error restoring scroll position: " + e.getMessage(), e);
+                            }
                         }
                     } else {
                         // If no children, use regular capture method
-                        captureViewOld(view, bitmap);
-                        viewAlreadyRendered = true;
+                        try {
+                            captureViewOld(view, bitmap);
+                            viewAlreadyRendered = true;
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error in captureViewOld for ScrollView: " + e.getMessage(), e);
+                        }
                     }
                 } catch (Exception e) {
-                    Log.e(TAG, "Error capturing ScrollView: " + e.getMessage());
+                    Log.e(TAG, "Error capturing ScrollView: " + e.getMessage(), e);
                     // Fall back to regular capture if ScrollView handling fails
-                    captureViewOld(view, bitmap);
-                    viewAlreadyRendered = true;
+                    try {
+                        captureViewOld(view, bitmap);
+                        viewAlreadyRendered = true;
+                    } catch (Exception inner) {
+                        Log.e(TAG, "Error in fallback captureViewOld: " + inner.getMessage(), inner);
+                    }
                 }
             }
 
@@ -457,21 +515,33 @@ public class ViewShot implements UIBlock {
                         ViewGroup viewGroup = (ViewGroup) view;
 
                         // Draw background for the entire height
-                        Drawable background = view.getBackground();
-                        if (background != null) {
-                            background.setBounds(0, 0, w, h);
-                            background.draw(canvas);
-                        } else {
-                            canvas.drawColor(Color.TRANSPARENT);
+                        try {
+                            Drawable background = view.getBackground();
+                            if (background != null) {
+                                background.setBounds(0, 0, w, h);
+                                background.draw(canvas);
+                            } else {
+                                canvas.drawColor(Color.TRANSPARENT);
+                            }
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error drawing ViewGroup background: " + e.getMessage(), e);
                         }
 
                         // Draw the ViewGroup content with proper positioning
-                        captureViewGroupContent(viewGroup, canvas, w, h);
+                        try {
+                            captureViewGroupContent(viewGroup, canvas, w, h);
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error in captureViewGroupContent: " + e.getMessage(), e);
+                        }
 
                     } catch (Exception e) {
-                        Log.e(TAG, "Error capturing ViewGroup: " + e.getMessage());
+                        Log.e(TAG, "Error capturing ViewGroup: " + e.getMessage(), e);
                         // Fall back to regular capture
-                        captureViewOld(view, bitmap);
+                        try {
+                            captureViewOld(view, bitmap);
+                        } catch (Exception inner) {
+                            Log.e(TAG, "Error in fallback captureViewOld for ViewGroup: " + inner.getMessage(), inner);
+                        }
                     }
                 }
                 else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !(view instanceof SurfaceView)) {
@@ -508,119 +578,233 @@ public class ViewShot implements UIBlock {
 
                                 if (result[0] != PixelCopy.SUCCESS) {
                                     Log.e(TAG, "PixelCopy failed with error: " + result[0]);
-                                    captureViewOld(view, bitmap);
+                                    try {
+                                        captureViewOld(view, bitmap);
+                                    } catch (Exception e) {
+                                        Log.e(TAG, "Error in fallback captureViewOld after PixelCopy failure: " + e.getMessage(), e);
+                                    }
                                 }
                             } catch (Exception e) {
-                                Log.e(TAG, "Error using PixelCopy: " + e.getMessage());
-                                captureViewOld(view, bitmap);
+                                Log.e(TAG, "Error using PixelCopy: " + e.getMessage(), e);
+                                try {
+                                    captureViewOld(view, bitmap);
+                                } catch (Exception inner) {
+                                    Log.e(TAG, "Error in fallback captureViewOld after PixelCopy error: " + inner.getMessage(), inner);
+                                }
                             }
                         } else {
-                            captureViewOld(view, bitmap);
+                            try {
+                                captureViewOld(view, bitmap);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error in captureViewOld when activity is null: " + e.getMessage(), e);
+                            }
                         }
                     } catch (Exception e) {
-                        Log.e(TAG, "Error with PixelCopy: " + e.getMessage());
-                        captureViewOld(view, bitmap);
+                        Log.e(TAG, "Error with PixelCopy: " + e.getMessage(), e);
+                        try {
+                            captureViewOld(view, bitmap);
+                        } catch (Exception inner) {
+                            Log.e(TAG, "Error in fallback captureViewOld: " + inner.getMessage(), inner);
+                        }
                     }
                 } else {
                     // For older Android versions or SurfaceView, use the old method
-                    captureViewOld(view, bitmap);
+                    try {
+                        captureViewOld(view, bitmap);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error in old device captureViewOld: " + e.getMessage(), e);
+                    }
                 }
             }
 
             // Process special children (TextureView, SurfaceView)
-            final Paint paint = new Paint();
-            paint.setAntiAlias(true);
-            paint.setFilterBitmap(true);
-            paint.setDither(true);
+            try {
+                final Paint paint = new Paint();
+                paint.setAntiAlias(true);
+                paint.setFilterBitmap(true);
+                paint.setDither(true);
 
-            // Process children that need special handling
-            final List<View> childrenList = getAllChildren(view);
+                // Process children that need special handling
+                final List<View> childrenList = getAllChildren(view);
 
-            for (final View child : childrenList) {
-                // Only process TextureView and SurfaceView - the rest are handled by captureView
-                if (child instanceof TextureView) {
-                    // skip all invisible to user child views
-                    if (child.getVisibility() != VISIBLE) continue;
-
-                    final TextureView tvChild = (TextureView) child;
-                    tvChild.setOpaque(false); // <-- switch off background fill
-
-                    final Bitmap childBitmapBuffer = tvChild.getBitmap(getExactBitmapForScreenshot(child.getWidth(), child.getHeight()));
-
-                    final int countCanvasSave = canvas.save();
-                    applyTransformations(canvas, view, child);
-                    canvas.drawBitmap(childBitmapBuffer, 0, 0, paint);
-                    canvas.restoreToCount(countCanvasSave);
-                    recycleBitmap(childBitmapBuffer);
-                } else if (child instanceof SurfaceView && handleGLSurfaceView) {
-                    final SurfaceView svChild = (SurfaceView)child;
-                    final CountDownLatch latch = new CountDownLatch(1);
-
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        final Bitmap childBitmapBuffer = getExactBitmapForScreenshot(child.getWidth(), child.getHeight());
+                for (final View child : childrenList) {
+                    // Only process TextureView and SurfaceView - the rest are handled by captureView
+                    if (child instanceof TextureView) {
                         try {
-                            PixelCopy.request(svChild, childBitmapBuffer, result -> {
-                                final int countCanvasSave = canvas.save();
-                                applyTransformations(canvas, view, child);
-                                canvas.drawBitmap(childBitmapBuffer, 0, 0, paint);
-                                canvas.restoreToCount(countCanvasSave);
-                                recycleBitmap(childBitmapBuffer);
-                                latch.countDown();
-                            }, new Handler(Looper.getMainLooper()));
-                            latch.await(SURFACE_VIEW_READ_PIXELS_TIMEOUT, TimeUnit.SECONDS);
+                            // skip all invisible to user child views
+                            if (child.getVisibility() != VISIBLE) continue;
+
+                            final TextureView tvChild = (TextureView) child;
+                            tvChild.setOpaque(false); // <-- switch off background fill
+
+                            Bitmap childBitmapBuffer = null;
+                            try {
+                                childBitmapBuffer = tvChild.getBitmap(getExactBitmapForScreenshot(child.getWidth(), child.getHeight()));
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error getting TextureView bitmap: " + e.getMessage(), e);
+                                continue;
+                            }
+
+                            if (childBitmapBuffer != null) {
+                                try {
+                                    final int countCanvasSave = canvas.save();
+                                    applyTransformations(canvas, view, child);
+                                    canvas.drawBitmap(childBitmapBuffer, 0, 0, paint);
+                                    canvas.restoreToCount(countCanvasSave);
+                                    recycleBitmap(childBitmapBuffer);
+                                } catch (Exception e) {
+                                    Log.e(TAG, "Error drawing TextureView bitmap: " + e.getMessage(), e);
+                                    recycleBitmap(childBitmapBuffer);
+                                }
+                            }
                         } catch (Exception e) {
-                            Log.e(TAG, "Cannot PixelCopy for " + svChild, e);
+                            Log.e(TAG, "Error processing TextureView: " + e.getMessage(), e);
                         }
-                    } else {
-                        Bitmap cache = svChild.getDrawingCache();
-                        if (cache != null) {
-                            canvas.drawBitmap(svChild.getDrawingCache(), 0, 0, paint);
+                    } else if (child instanceof SurfaceView && handleGLSurfaceView) {
+                        try {
+                            final SurfaceView svChild = (SurfaceView)child;
+                            final CountDownLatch latch = new CountDownLatch(1);
+
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                                Bitmap childBitmapBuffer = null;
+                                try {
+                                    childBitmapBuffer = getExactBitmapForScreenshot(child.getWidth(), child.getHeight());
+                                    final Bitmap finalChildBitmapBuffer = childBitmapBuffer;
+
+                                    PixelCopy.request(svChild, childBitmapBuffer, result -> {
+                                        try {
+                                            final int countCanvasSave = canvas.save();
+                                            applyTransformations(canvas, view, child);
+                                            canvas.drawBitmap(finalChildBitmapBuffer, 0, 0, paint);
+                                            canvas.restoreToCount(countCanvasSave);
+                                        } catch (Exception e) {
+                                            Log.e(TAG, "Error drawing SurfaceView bitmap: " + e.getMessage(), e);
+                                        } finally {
+                                            recycleBitmap(finalChildBitmapBuffer);
+                                            latch.countDown();
+                                        }
+                                    }, new Handler(Looper.getMainLooper()));
+
+                                    try {
+                                        latch.await(SURFACE_VIEW_READ_PIXELS_TIMEOUT, TimeUnit.SECONDS);
+                                    } catch (InterruptedException e) {
+                                        Log.e(TAG, "Interrupted waiting for SurfaceView PixelCopy: " + e.getMessage(), e);
+                                    }
+                                } catch (Exception e) {
+                                    Log.e(TAG, "Cannot PixelCopy for " + svChild + ": " + e.getMessage(), e);
+                                    if (childBitmapBuffer != null) {
+                                        recycleBitmap(childBitmapBuffer);
+                                    }
+                                }
+                            } else {
+                                try {
+                                    Bitmap cache = svChild.getDrawingCache();
+                                    if (cache != null) {
+                                        canvas.drawBitmap(svChild.getDrawingCache(), 0, 0, paint);
+                                    }
+                                } catch (Exception e) {
+                                    Log.e(TAG, "Error drawing SurfaceView drawing cache: " + e.getMessage(), e);
+                                }
+                            }
+                        } catch (Exception e) {
+                            Log.e(TAG, "Error processing SurfaceView: " + e.getMessage(), e);
                         }
                     }
                 }
+            } catch (Exception e) {
+                Log.e(TAG, "Error processing special views: " + e.getMessage(), e);
             }
 
             // Handle scaling if needed
-            if (width != null && height != null && (width != w || height != h)) {
-                try {
-                    final Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true);
-                    recycleBitmap(bitmap);
+            try {
+                if (width != null && height != null && (width != w || height != h)) {
+                    try {
+                        final Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true);
+                        recycleBitmap(bitmap);
+                        bitmap = null; // Prevent duplicate recycling
 
-                    // Use the scaled bitmap for output
-                    if (Formats.RAW == this.format && os instanceof ReusableByteArrayOutputStream) {
-                        final int total = width * height * ARGB_SIZE;
-                        final ReusableByteArrayOutputStream rbaos = cast(os);
-                        scaledBitmap.copyPixelsToBuffer(rbaos.asBuffer(total));
-                        rbaos.setSize(total);
-                    } else {
-                        final Bitmap.CompressFormat cf = Formats.mapping[this.format];
-                        scaledBitmap.compress(cf, (int) (100.0 * quality), os);
+                        // Use the scaled bitmap for output
+                        if (Formats.RAW == this.format && os instanceof ReusableByteArrayOutputStream) {
+                            try {
+                                final int total = width * height * ARGB_SIZE;
+                                final ReusableByteArrayOutputStream rbaos = cast(os);
+                                scaledBitmap.copyPixelsToBuffer(rbaos.asBuffer(total));
+                                rbaos.setSize(total);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error copying scaled bitmap pixels to buffer: " + e.getMessage(), e);
+                                // Try compression as fallback
+                                try {
+                                    final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+                                    scaledBitmap.compress(cf, (int) (100.0 * quality), os);
+                                } catch (Exception inner) {
+                                    Log.e(TAG, "Error compressing scaled bitmap: " + inner.getMessage(), inner);
+                                }
+                            }
+                        } else {
+                            try {
+                                final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+                                scaledBitmap.compress(cf, (int) (100.0 * quality), os);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error compressing scaled bitmap: " + e.getMessage(), e);
+                            }
+                        }
+
+                        recycleBitmap(scaledBitmap);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error scaling bitmap: " + e.getMessage(), e);
+                        // Use original bitmap if scaling fails
+                        if (bitmap != null) {
+                            try {
+                                final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+                                bitmap.compress(cf, (int) (100.0 * quality), os);
+                            } catch (Exception inner) {
+                                Log.e(TAG, "Error compressing original bitmap after scaling failure: " + inner.getMessage(), inner);
+                            }
+                            recycleBitmap(bitmap);
+                            bitmap = null;
+                        }
                     }
+                } else {
+                    // Use the original bitmap for output
+                    if (bitmap != null) {
+                        if (Formats.RAW == this.format && os instanceof ReusableByteArrayOutputStream) {
+                            try {
+                                final int total = w * h * ARGB_SIZE;
+                                final ReusableByteArrayOutputStream rbaos = cast(os);
+                                bitmap.copyPixelsToBuffer(rbaos.asBuffer(total));
+                                rbaos.setSize(total);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error copying bitmap pixels to buffer: " + e.getMessage(), e);
+                                // Try compression as fallback
+                                try {
+                                    final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+                                    bitmap.compress(cf, (int) (100.0 * quality), os);
+                                } catch (Exception inner) {
+                                    Log.e(TAG, "Error compressing bitmap in fallback: " + inner.getMessage(), inner);
+                                }
+                            }
+                        } else {
+                            try {
+                                final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+                                bitmap.compress(cf, (int) (100.0 * quality), os);
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error compressing bitmap: " + e.getMessage(), e);
+                            }
+                        }
 
-                    recycleBitmap(scaledBitmap);
-                } catch (Exception e) {
-                    Log.e(TAG, "Error scaling bitmap: " + e.getMessage());
-                    // Use original bitmap if scaling fails
-                    final Bitmap.CompressFormat cf = Formats.mapping[this.format];
-                    bitmap.compress(cf, (int) (100.0 * quality), os);
+                        recycleBitmap(bitmap);
+                        bitmap = null;
+                    }
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error in bitmap output handling: " + e.getMessage(), e);
+                // Try to clean up resources
+                if (bitmap != null) {
                     recycleBitmap(bitmap);
                 }
-            } else {
-                // Use the original bitmap for output
-                if (Formats.RAW == this.format && os instanceof ReusableByteArrayOutputStream) {
-                    final int total = w * h * ARGB_SIZE;
-                    final ReusableByteArrayOutputStream rbaos = cast(os);
-                    bitmap.copyPixelsToBuffer(rbaos.asBuffer(total));
-                    rbaos.setSize(total);
-                } else {
-                    final Bitmap.CompressFormat cf = Formats.mapping[this.format];
-                    bitmap.compress(cf, (int) (100.0 * quality), os);
-                }
-
-                recycleBitmap(bitmap);
             }
 
-            return new Point(w, h); // return image width and height
+            return resolution; // return image width and height
         } catch (Exception e) {
             Log.e(TAG, "Fatal error taking screenshot: " + e.getMessage(), e);
             // Return a default resolution in case of complete failure
@@ -637,32 +821,49 @@ public class ViewShot implements UIBlock {
 
             // First ensure all children are measured
             for (int i = 0; i < viewGroup.getChildCount(); i++) {
-                View child = viewGroup.getChildAt(i);
-                if (child.getVisibility() != View.VISIBLE) continue;
+                try {
+                    View child = viewGroup.getChildAt(i);
+                    if (child == null || child.getVisibility() != View.VISIBLE) continue;
 
-                // Ensure child is measured
-                if (child.getMeasuredWidth() <= 0 || child.getMeasuredHeight() <= 0) {
-                    child.measure(
-                        View.MeasureSpec.makeMeasureSpec(viewGroup.getWidth(), View.MeasureSpec.AT_MOST),
-                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
-                    );
-                }
+                    // Ensure child is measured
+                    try {
+                        if (child.getMeasuredWidth() <= 0 || child.getMeasuredHeight() <= 0) {
+                            child.measure(
+                                View.MeasureSpec.makeMeasureSpec(viewGroup.getWidth(), View.MeasureSpec.AT_MOST),
+                                View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+                            );
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error measuring child view: " + e.getMessage(), e);
+                        continue;
+                    }
 
-                // Get child's bottom position
-                int childBottom = child.getTop() + child.getMeasuredHeight();
+                    // Get child's bottom position
+                    int childBottom = child.getTop() + child.getMeasuredHeight();
 
-                // Add margins if any
-                if (child.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
-                    ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) child.getLayoutParams();
-                    childBottom += params.bottomMargin;
-                }
+                    // Add margins if any
+                    try {
+                        if (child.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
+                            ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) child.getLayoutParams();
+                            childBottom += params.bottomMargin;
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error calculating margins: " + e.getMessage(), e);
+                    }
 
-                totalHeight = Math.max(totalHeight, childBottom);
+                    totalHeight = Math.max(totalHeight, childBottom);
 
-                // Recursively check children of ViewGroups
-                if (child instanceof ViewGroup) {
-                    int childGroupHeight = calculateTotalHeight((ViewGroup) child);
-                    totalHeight = Math.max(totalHeight, child.getTop() + childGroupHeight);
+                    // Recursively check children of ViewGroups
+                    try {
+                        if (child instanceof ViewGroup) {
+                            int childGroupHeight = calculateTotalHeight((ViewGroup) child);
+                            totalHeight = Math.max(totalHeight, child.getTop() + childGroupHeight);
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error in recursive height calculation: " + e.getMessage(), e);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error processing child at index " + i + ": " + e.getMessage(), e);
                 }
             }
 
@@ -672,7 +873,7 @@ public class ViewShot implements UIBlock {
             // Ensure we don't return something smaller than the current height
             return Math.max(totalHeight, viewGroup.getHeight());
         } catch (Exception e) {
-            Log.e(TAG, "Error calculating ViewGroup height: " + e.getMessage());
+            Log.e(TAG, "Error calculating ViewGroup height: " + e.getMessage(), e);
             return viewGroup.getHeight();
         }
     }
@@ -687,35 +888,54 @@ public class ViewShot implements UIBlock {
             try {
                 viewGroup.draw(canvas);
             } catch (Exception e) {
-                Log.e(TAG, "Error in direct ViewGroup draw: " + e.getMessage());
+                Log.e(TAG, "Error in direct ViewGroup draw: " + e.getMessage(), e);
 
                 // If direct draw fails, draw each child individually
                 for (int i = 0; i < viewGroup.getChildCount(); i++) {
-                    View child = viewGroup.getChildAt(i);
-                    if (child.getVisibility() != View.VISIBLE) continue;
-
-                    int childSaveCount = canvas.save();
-                    canvas.translate(child.getLeft(), child.getTop());
-
                     try {
-                        // Try to draw the child
-                        child.draw(canvas);
+                        View child = viewGroup.getChildAt(i);
+                        if (child == null || child.getVisibility() != View.VISIBLE) continue;
 
-                        // If the child is a ViewGroup and extends beyond the visible area
-                        if (child instanceof ViewGroup &&
-                            (child.getTop() + child.getHeight() > viewGroup.getHeight())) {
-                            captureViewGroupContent((ViewGroup) child, canvas, child.getWidth(), height - child.getTop());
+                        int childSaveCount = 0;
+                        try {
+                            childSaveCount = canvas.save();
+                            canvas.translate(child.getLeft(), child.getTop());
+                        } catch (Exception ce) {
+                            Log.e(TAG, "Error saving canvas state for child: " + ce.getMessage(), ce);
+                            continue;
+                        }
+
+                        try {
+                            // Try to draw the child
+                            child.draw(canvas);
+
+                            // If the child is a ViewGroup and extends beyond the visible area
+                            if (child instanceof ViewGroup &&
+                                (child.getTop() + child.getHeight() > viewGroup.getHeight())) {
+                                captureViewGroupContent((ViewGroup) child, canvas, child.getWidth(), height - child.getTop());
+                            }
+                        } catch (Exception ce) {
+                            Log.e(TAG, "Error drawing child: " + ce.getMessage(), ce);
+                        }
+
+                        try {
+                            canvas.restoreToCount(childSaveCount);
+                        } catch (Exception ce) {
+                            Log.e(TAG, "Error restoring canvas state: " + ce.getMessage(), ce);
                         }
                     } catch (Exception ce) {
-                        Log.e(TAG, "Error drawing child: " + ce.getMessage());
+                        Log.e(TAG, "Error processing child at index " + i + ": " + ce.getMessage(), ce);
                     }
-
-                    canvas.restoreToCount(childSaveCount);
                 }
             }
-            canvas.restoreToCount(saveCount);
+
+            try {
+                canvas.restoreToCount(saveCount);
+            } catch (Exception e) {
+                Log.e(TAG, "Error restoring canvas state after ViewGroup draw: " + e.getMessage(), e);
+            }
         } catch (Exception e) {
-            Log.e(TAG, "Error capturing ViewGroup content: " + e.getMessage());
+            Log.e(TAG, "Error capturing ViewGroup content: " + e.getMessage(), e);
         }
     }
 
@@ -726,33 +946,66 @@ public class ViewShot implements UIBlock {
     @SuppressWarnings("UnusedReturnValue")
     private Matrix applyTransformations(final Canvas c, @NonNull final View root, @NonNull final View child) {
         final Matrix transform = new Matrix();
-        final LinkedList<View> ms = new LinkedList<>();
+        try {
+            final LinkedList<View> ms = new LinkedList<>();
 
-        // find all parents of the child view
-        View iterator = child;
-        do {
-            ms.add(iterator);
+            // find all parents of the child view
+            try {
+                View iterator = child;
+                do {
+                    ms.add(iterator);
 
-            iterator = (View) iterator.getParent();
-        } while (iterator != root);
+                    ViewParent parent = iterator.getParent();
+                    if (!(parent instanceof View)) {
+                        break;
+                    }
+                    iterator = (View) parent;
+                } while (iterator != root && iterator != null);
+            } catch (Exception e) {
+                Log.e(TAG, "Error finding parent hierarchy: " + e.getMessage(), e);
+                // If we can't find parents, at least try to transform for just the child
+                ms.add(child);
+            }
 
-        // apply transformations from parent --> child order
-        Collections.reverse(ms);
+            // apply transformations from parent --> child order
+            try {
+                Collections.reverse(ms);
+            } catch (Exception e) {
+                Log.e(TAG, "Error reversing transformation order: " + e.getMessage(), e);
+            }
 
-        for (final View v : ms) {
-            c.save();
+            for (final View v : ms) {
+                try {
+                    if (v == null) continue;
 
-            // apply each view transformations, so each child will be affected by them
-            final float dx = v.getLeft() + ((v != child) ? v.getPaddingLeft() : 0) + v.getTranslationX();
-            final float dy = v.getTop() + ((v != child) ? v.getPaddingTop() : 0) + v.getTranslationY();
-            c.translate(dx, dy);
-            c.rotate(v.getRotation(), v.getPivotX(), v.getPivotY());
-            c.scale(v.getScaleX(), v.getScaleY());
+                    try {
+                        c.save();
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error saving canvas state: " + e.getMessage(), e);
+                        continue;
+                    }
 
-            // compute the matrix just for any future use
-            transform.postTranslate(dx, dy);
-            transform.postRotate(v.getRotation(), v.getPivotX(), v.getPivotY());
-            transform.postScale(v.getScaleX(), v.getScaleY());
+                    // apply each view transformations, so each child will be affected by them
+                    try {
+                        final float dx = v.getLeft() + ((v != child) ? v.getPaddingLeft() : 0) + v.getTranslationX();
+                        final float dy = v.getTop() + ((v != child) ? v.getPaddingTop() : 0) + v.getTranslationY();
+                        c.translate(dx, dy);
+                        c.rotate(v.getRotation(), v.getPivotX(), v.getPivotY());
+                        c.scale(v.getScaleX(), v.getScaleY());
+
+                        // compute the matrix just for any future use
+                        transform.postTranslate(dx, dy);
+                        transform.postRotate(v.getRotation(), v.getPivotX(), v.getPivotY());
+                        transform.postScale(v.getScaleX(), v.getScaleY());
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error applying transformations: " + e.getMessage(), e);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error processing view in transformation chain: " + e.getMessage(), e);
+                }
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Fatal error in applyTransformations: " + e.getMessage(), e);
         }
 
         return transform;
@@ -900,24 +1153,49 @@ public class ViewShot implements UIBlock {
     private void captureViewOld(final View view, final Bitmap bitmap) {
         try {
             // Original capture method
-            final Canvas canvas = new Canvas(bitmap);
-
-            // Handle background
-            final Drawable background = view.getBackground();
-            if (background != null) {
-                background.draw(canvas);
-            } else {
-                canvas.drawColor(Color.TRANSPARENT);
+            Canvas canvas = null;
+            try {
+                canvas = new Canvas(bitmap);
+            } catch (Exception e) {
+                Log.e(TAG, "Error creating canvas: " + e.getMessage(), e);
+                return;
             }
 
-            view.draw(canvas);
+            // Handle background
+            try {
+                final Drawable background = view.getBackground();
+                if (background != null) {
+                    try {
+                        background.draw(canvas);
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error drawing background: " + e.getMessage(), e);
+                        canvas.drawColor(Color.WHITE); // Fallback to white background
+                    }
+                } else {
+                    canvas.drawColor(Color.TRANSPARENT);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Error handling background: " + e.getMessage(), e);
+                try {
+                    canvas.drawColor(Color.WHITE); // Fallback to white background
+                } catch (Exception inner) {
+                    Log.e(TAG, "Error drawing fallback background: " + inner.getMessage(), inner);
+                }
+            }
+
+            try {
+                view.draw(canvas);
+            } catch (Exception e) {
+                Log.e(TAG, "Error drawing view: " + e.getMessage(), e);
+            }
         } catch (Exception e) {
-            Log.e(TAG, "Error in captureViewOld: " + e.getMessage());
+            Log.e(TAG, "Fatal error in captureViewOld: " + e.getMessage(), e);
             // At least try to draw something
             try {
                 Canvas canvas = new Canvas(bitmap);
                 canvas.drawColor(Color.WHITE);
             } catch (Exception ignored) {
+                Log.e(TAG, "Failed to create even a blank canvas", ignored);
                 // Nothing more we can do
             }
         }
