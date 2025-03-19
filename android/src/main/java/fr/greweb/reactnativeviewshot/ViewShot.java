@@ -664,19 +664,23 @@ public class ViewShot implements UIBlock {
                         try {
                             final SurfaceView svChild = (SurfaceView)child;
                             final CountDownLatch latch = new CountDownLatch(1);
+                            final View finalView = view;
+                            final View finalChild = child;
+                            final Paint finalPaint = paint;
 
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                                 Bitmap childBitmapBuffer = null;
                                 try {
                                     childBitmapBuffer = getExactBitmapForScreenshot(child.getWidth(), child.getHeight());
                                     final Bitmap finalChildBitmapBuffer = childBitmapBuffer;
+                                    final Canvas finalCanvas = canvas;
 
                                     PixelCopy.request(svChild, childBitmapBuffer, result -> {
                                         try {
-                                            final int countCanvasSave = canvas.save();
-                                            applyTransformations(canvas, view, child);
-                                            canvas.drawBitmap(finalChildBitmapBuffer, 0, 0, paint);
-                                            canvas.restoreToCount(countCanvasSave);
+                                            final int countCanvasSave = finalCanvas.save();
+                                            applyTransformations(finalCanvas, finalView, finalChild);
+                                            finalCanvas.drawBitmap(finalChildBitmapBuffer, 0, 0, finalPaint);
+                                            finalCanvas.restoreToCount(countCanvasSave);
                                         } catch (Exception e) {
                                             Log.e(TAG, "Error drawing SurfaceView bitmap: " + e.getMessage(), e);
                                         } finally {
