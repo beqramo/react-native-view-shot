@@ -19,7 +19,7 @@ type Options = {
 
 if (!RNViewShot) {
   console.warn(
-    "react-native-view-shot: NativeModules.RNViewShot is undefined. Make sure the library is linked on the native side."
+    "react-native-view-shot: RNViewShot is undefined. Make sure the library is linked on the native side."
   );
 }
 

@@ -1229,3 +1229,4 @@ public class ViewShot implements UIBlock {
     }
 
 }
+
