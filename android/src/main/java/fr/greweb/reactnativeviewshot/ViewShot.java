@@ -7,6 +7,7 @@ import android.graphics.Color;
 import android.graphics.Matrix;
 import android.graphics.Paint;
 import android.graphics.Point;
+import android.graphics.Rect;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -22,11 +23,11 @@ import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewParent;
 import android.widget.ScrollView;
 
 import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReactApplicationContext;
-import com.facebook.react.fabric.interop.UIBlockViewResolver;
 import com.facebook.react.uimanager.NativeViewHierarchyManager;
 import com.facebook.react.uimanager.UIBlock;
 
@@ -55,10 +56,13 @@ import javax.annotation.Nullable;
 
 import static android.view.View.VISIBLE;
 
+import android.graphics.drawable.Drawable;
+import android.graphics.PorterDuff;
+
 /**
  * Snapshot utility class allow to screenshot a view.
  */
-public class ViewShot implements UIBlock, com.facebook.react.fabric.interop.UIBlock {
+public class ViewShot implements UIBlock {
     //region Constants
     /**
      * Tag fort Class logs.
@@ -184,17 +188,6 @@ public class ViewShot implements UIBlock, com.facebook.react.fabric.interop.UIBl
     //region Overrides
     @Override
     public void execute(final NativeViewHierarchyManager nativeViewHierarchyManager) {
-        executeImpl(nativeViewHierarchyManager, null);
-    }
-
-    @Override
-    public void execute(@NonNull UIBlockViewResolver uiBlockViewResolver) {
-        executeImpl(null, uiBlockViewResolver);
-    }
-    //endregion
-
-    //region Implementation
-    private void executeImpl(final NativeViewHierarchyManager nativeViewHierarchyManager, final UIBlockViewResolver uiBlockViewResolver) {
         executor.execute(new Runnable () {
             @Override
             public void run() {
@@ -203,8 +196,6 @@ public class ViewShot implements UIBlock, com.facebook.react.fabric.interop.UIBl
 
                     if (tag == -1) {
                         view = currentActivity.getWindow().getDecorView().findViewById(android.R.id.content);
-                    } else if (uiBlockViewResolver != null) {
-                        view = uiBlockViewResolver.resolveView(tag);
                     } else {
                         view = nativeViewHierarchyManager.resolveView(tag);
                     }
@@ -235,7 +226,9 @@ public class ViewShot implements UIBlock, com.facebook.react.fabric.interop.UIBl
             }
         });
     }
+    //endregion
 
+    //region Implementation
     private void saveToTempFileOnDevice(@NonNull final View view) throws IOException {
         final FileOutputStream fos = new FileOutputStream(output);
         captureView(view, fos);
@@ -351,113 +344,379 @@ public class ViewShot implements UIBlock, com.facebook.react.fabric.interop.UIBl
      * @return screenshot resolution, Width * Height
      */
     private Point captureViewImpl(@NonNull final View view, @NonNull final OutputStream os) {
-        int w = view.getWidth();
-        int h = view.getHeight();
+        try {
+            int w = view.getWidth();
+            int h = view.getHeight();
 
-        if (w <= 0 || h <= 0) {
-            throw new RuntimeException("Impossible to snapshot the view: view is invalid");
-        }
-
-        // evaluate real height
-        if (snapshotContentContainer) {
-            h = 0;
-            ScrollView scrollView = (ScrollView) view;
-            for (int i = 0; i < scrollView.getChildCount(); i++) {
-                h += scrollView.getChildAt(i).getHeight();
+            if (w <= 0 || h <= 0) {
+                throw new RuntimeException("Impossible to snapshot the view: view is invalid");
             }
-        }
 
-        final Point resolution = new Point(w, h);
-        Bitmap bitmap = getBitmapForScreenshot(w, h);
+            Log.d(TAG, "Initial view dimensions: " + w + "x" + h);
 
-        final Paint paint = new Paint();
-        paint.setAntiAlias(true);
-        paint.setFilterBitmap(true);
-        paint.setDither(true);
+            // Calculate heights and dimensions first
+            if (snapshotContentContainer && view instanceof ScrollView) {
+                try {
+                    ScrollView scrollView = (ScrollView) view;
+                    if (scrollView.getChildCount() > 0) {
+                        scrollView.measure(
+                            View.MeasureSpec.makeMeasureSpec(w, View.MeasureSpec.EXACTLY),
+                            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+                        );
+                        View content = scrollView.getChildAt(0);
+                        int contentHeight = content.getMeasuredHeight();
+                        h = contentHeight + scrollView.getPaddingTop() + scrollView.getPaddingBottom();
+                        Log.d(TAG, "Adjusted ScrollView height to: " + h);
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error measuring ScrollView content: " + e.getMessage());
+                    // Continue with original height if measurement fails
+                }
+            }
+            // Special handling for ViewGroups to capture entire content height (especially for React Native refs)
+            else if (view instanceof ViewGroup) {
+                try {
+                    ViewGroup viewGroup = (ViewGroup) view;
 
-        // Uncomment next line if you want to wait attached android studio debugger:
-        //   Debug.waitForDebugger();
+                    // Calculate total content height for the ViewGroup
+                    int totalHeight = calculateTotalHeight(viewGroup);
 
-        final Canvas c = new Canvas(bitmap);
-        view.draw(c);
+                    // Only use the calculated height if it's greater than the current view height
+                    // This prevents cutting off content in cases where the ref contains more content than what's visible
+                    if (totalHeight > h) {
+                        Log.d(TAG, "Adjusted ViewGroup height from " + h + " to: " + totalHeight);
+                        h = totalHeight;
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error calculating ViewGroup content height: " + e.getMessage());
+                    // Continue with original height if calculation fails
+                }
+            }
 
-        //after view is drawn, go through children
-        final List<View> childrenList = getAllChildren(view);
+            final Point resolution = new Point(w, h);
+            final Bitmap bitmap = getBitmapForScreenshot(w, h);
+            final Canvas canvas = new Canvas(bitmap);
 
-        for (final View child : childrenList) {
-            // skip any child that we don't know how to process
-            if (child instanceof TextureView) {
-                // skip all invisible to user child views
-                if (child.getVisibility() != VISIBLE) continue;
+            // Use a flag to track if we've already rendered the view
+            boolean viewAlreadyRendered = false;
 
-                final TextureView tvChild = (TextureView) child;
-                tvChild.setOpaque(false); // <-- switch off background fill
+            // NOW handle the ScrollView rendering after we have a valid canvas
+            if (snapshotContentContainer && view instanceof ScrollView) {
+                try {
+                    ScrollView scrollView = (ScrollView) view;
+                    if (scrollView.getChildCount() > 0) {
+                        // Save original scroll position
+                        int originalScrollY = scrollView.getScrollY();
+                        View content = scrollView.getChildAt(0);
 
-                // NOTE (olku): get re-usable bitmap. TextureView should use bitmaps with matching size,
-                // otherwise content of the TextureView will be scaled to provided bitmap dimensions
-                final Bitmap childBitmapBuffer = tvChild.getBitmap(getExactBitmapForScreenshot(child.getWidth(), child.getHeight()));
+                        try {
+                            // Use a solid white background instead of transparent
+                            canvas.drawColor(Color.WHITE);
 
-                final int countCanvasSave = c.save();
-                applyTransformations(c, view, child);
+                            // Reset scroll position for capture
+                            scrollView.setScrollY(0);
 
-                // due to re-use of bitmaps for screenshot, we can get bitmap that is bigger in size than requested
-                c.drawBitmap(childBitmapBuffer, 0, 0, paint);
+                            // Simple approach: Translate and draw directly
+                            canvas.save();
 
-                c.restoreToCount(countCanvasSave);
-                recycleBitmap(childBitmapBuffer);
-            } else if (child instanceof SurfaceView && handleGLSurfaceView) {
-                final SurfaceView svChild = (SurfaceView)child;
-                final CountDownLatch latch = new CountDownLatch(1);
+                            // Apply padding offset
+                            canvas.translate(scrollView.getPaddingLeft(), scrollView.getPaddingTop());
 
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                    final Bitmap childBitmapBuffer = getExactBitmapForScreenshot(child.getWidth(), child.getHeight());
+                            // Draw just the content without any decoration
+                            content.draw(canvas);
+
+                            canvas.restore();
+
+                            // Mark that we've already rendered the view
+                            viewAlreadyRendered = true;
+
+                            // Log for debugging
+                            Log.d(TAG, "ScrollView capture complete using simplified approach");
+                        } finally {
+                            // Always restore original scroll position
+                            scrollView.setScrollY(originalScrollY);
+                        }
+                    } else {
+                        // If no children, use regular capture method
+                        captureViewOld(view, bitmap);
+                        viewAlreadyRendered = true;
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error capturing ScrollView: " + e.getMessage());
+                    // Fall back to regular capture if ScrollView handling fails
+                    captureViewOld(view, bitmap);
+                    viewAlreadyRendered = true;
+                }
+            }
+
+            // Only proceed with other rendering methods if we haven't already rendered the view
+            if (!viewAlreadyRendered) {
+                // Special handling for ViewGroups (especially React Native refs)
+                if (view instanceof ViewGroup && h > view.getHeight()) {
                     try {
-                        PixelCopy.request(svChild, childBitmapBuffer, new PixelCopy.OnPixelCopyFinishedListener() {
-                            @Override
-                            public void onPixelCopyFinished(int copyResult) {
-                                final int countCanvasSave = c.save();
-                                applyTransformations(c, view, child);
-                                c.drawBitmap(childBitmapBuffer, 0, 0, paint);
-                                c.restoreToCount(countCanvasSave);
-                                recycleBitmap(childBitmapBuffer);
-                                latch.countDown();
-                            }
-                        }, new Handler(Looper.getMainLooper()));
-                        latch.await(SURFACE_VIEW_READ_PIXELS_TIMEOUT, TimeUnit.SECONDS);
+                        ViewGroup viewGroup = (ViewGroup) view;
+
+                        // Draw background for the entire height
+                        Drawable background = view.getBackground();
+                        if (background != null) {
+                            background.setBounds(0, 0, w, h);
+                            background.draw(canvas);
+                        } else {
+                            canvas.drawColor(Color.TRANSPARENT);
+                        }
+
+                        // Draw the ViewGroup content with proper positioning
+                        captureViewGroupContent(viewGroup, canvas, w, h);
+
                     } catch (Exception e) {
-                        Log.e(TAG, "Cannot PixelCopy for " + svChild, e);
+                        Log.e(TAG, "Error capturing ViewGroup: " + e.getMessage());
+                        // Fall back to regular capture
+                        captureViewOld(view, bitmap);
+                    }
+                }
+                else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && !(view instanceof SurfaceView)) {
+                    // For Android O and above, use PixelCopy for better quality captures
+                    try {
+                        final Activity activity = currentActivity;
+                        if (activity != null) {
+                            final CountDownLatch latch = new CountDownLatch(1);
+                            final int[] result = new int[1];
+
+                            try {
+                                final int[] viewLocation = new int[2];
+                                view.getLocationInWindow(viewLocation);
+                                final Rect rect = new Rect(
+                                    viewLocation[0],
+                                    viewLocation[1],
+                                    viewLocation[0] + view.getWidth(),
+                                    viewLocation[1] + view.getHeight()
+                                );
+
+                                PixelCopy.request(
+                                    activity.getWindow(),
+                                    rect,
+                                    bitmap,
+                                    copyResult -> {
+                                        result[0] = copyResult;
+                                        latch.countDown();
+                                    },
+                                    new Handler(Looper.getMainLooper())
+                                );
+
+                                // Wait for the pixel copy to complete
+                                latch.await(SURFACE_VIEW_READ_PIXELS_TIMEOUT, TimeUnit.SECONDS);
+
+                                if (result[0] != PixelCopy.SUCCESS) {
+                                    Log.e(TAG, "PixelCopy failed with error: " + result[0]);
+                                    captureViewOld(view, bitmap);
+                                }
+                            } catch (Exception e) {
+                                Log.e(TAG, "Error using PixelCopy: " + e.getMessage());
+                                captureViewOld(view, bitmap);
+                            }
+                        } else {
+                            captureViewOld(view, bitmap);
+                        }
+                    } catch (Exception e) {
+                        Log.e(TAG, "Error with PixelCopy: " + e.getMessage());
+                        captureViewOld(view, bitmap);
                     }
                 } else {
-                    Bitmap cache = svChild.getDrawingCache();
-                    if (cache != null) {
-                        c.drawBitmap(svChild.getDrawingCache(), 0, 0, paint);
+                    // For older Android versions or SurfaceView, use the old method
+                    captureViewOld(view, bitmap);
+                }
+            }
+
+            // Process special children (TextureView, SurfaceView)
+            final Paint paint = new Paint();
+            paint.setAntiAlias(true);
+            paint.setFilterBitmap(true);
+            paint.setDither(true);
+
+            // Process children that need special handling
+            final List<View> childrenList = getAllChildren(view);
+
+            for (final View child : childrenList) {
+                // Only process TextureView and SurfaceView - the rest are handled by captureView
+                if (child instanceof TextureView) {
+                    // skip all invisible to user child views
+                    if (child.getVisibility() != VISIBLE) continue;
+
+                    final TextureView tvChild = (TextureView) child;
+                    tvChild.setOpaque(false); // <-- switch off background fill
+
+                    final Bitmap childBitmapBuffer = tvChild.getBitmap(getExactBitmapForScreenshot(child.getWidth(), child.getHeight()));
+
+                    final int countCanvasSave = canvas.save();
+                    applyTransformations(canvas, view, child);
+                    canvas.drawBitmap(childBitmapBuffer, 0, 0, paint);
+                    canvas.restoreToCount(countCanvasSave);
+                    recycleBitmap(childBitmapBuffer);
+                } else if (child instanceof SurfaceView && handleGLSurfaceView) {
+                    final SurfaceView svChild = (SurfaceView)child;
+                    final CountDownLatch latch = new CountDownLatch(1);
+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                        final Bitmap childBitmapBuffer = getExactBitmapForScreenshot(child.getWidth(), child.getHeight());
+                        try {
+                            PixelCopy.request(svChild, childBitmapBuffer, result -> {
+                                final int countCanvasSave = canvas.save();
+                                applyTransformations(canvas, view, child);
+                                canvas.drawBitmap(childBitmapBuffer, 0, 0, paint);
+                                canvas.restoreToCount(countCanvasSave);
+                                recycleBitmap(childBitmapBuffer);
+                                latch.countDown();
+                            }, new Handler(Looper.getMainLooper()));
+                            latch.await(SURFACE_VIEW_READ_PIXELS_TIMEOUT, TimeUnit.SECONDS);
+                        } catch (Exception e) {
+                            Log.e(TAG, "Cannot PixelCopy for " + svChild, e);
+                        }
+                    } else {
+                        Bitmap cache = svChild.getDrawingCache();
+                        if (cache != null) {
+                            canvas.drawBitmap(svChild.getDrawingCache(), 0, 0, paint);
+                        }
                     }
                 }
             }
+
+            // Handle scaling if needed
+            if (width != null && height != null && (width != w || height != h)) {
+                try {
+                    final Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true);
+                    recycleBitmap(bitmap);
+
+                    // Use the scaled bitmap for output
+                    if (Formats.RAW == this.format && os instanceof ReusableByteArrayOutputStream) {
+                        final int total = width * height * ARGB_SIZE;
+                        final ReusableByteArrayOutputStream rbaos = cast(os);
+                        scaledBitmap.copyPixelsToBuffer(rbaos.asBuffer(total));
+                        rbaos.setSize(total);
+                    } else {
+                        final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+                        scaledBitmap.compress(cf, (int) (100.0 * quality), os);
+                    }
+
+                    recycleBitmap(scaledBitmap);
+                } catch (Exception e) {
+                    Log.e(TAG, "Error scaling bitmap: " + e.getMessage());
+                    // Use original bitmap if scaling fails
+                    final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+                    bitmap.compress(cf, (int) (100.0 * quality), os);
+                    recycleBitmap(bitmap);
+                }
+            } else {
+                // Use the original bitmap for output
+                if (Formats.RAW == this.format && os instanceof ReusableByteArrayOutputStream) {
+                    final int total = w * h * ARGB_SIZE;
+                    final ReusableByteArrayOutputStream rbaos = cast(os);
+                    bitmap.copyPixelsToBuffer(rbaos.asBuffer(total));
+                    rbaos.setSize(total);
+                } else {
+                    final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+                    bitmap.compress(cf, (int) (100.0 * quality), os);
+                }
+
+                recycleBitmap(bitmap);
+            }
+
+            return new Point(w, h); // return image width and height
+        } catch (Exception e) {
+            Log.e(TAG, "Fatal error taking screenshot: " + e.getMessage(), e);
+            // Return a default resolution in case of complete failure
+            return new Point(0, 0);
         }
+    }
 
-        if (width != null && height != null && (width != w || height != h)) {
-            final Bitmap scaledBitmap = Bitmap.createScaledBitmap(bitmap, width, height, true);
-            recycleBitmap(bitmap);
+    /**
+     * Calculate total height of a ViewGroup considering all its children
+     */
+    private int calculateTotalHeight(ViewGroup viewGroup) {
+        try {
+            int totalHeight = 0;
 
-            bitmap = scaledBitmap;
+            // First ensure all children are measured
+            for (int i = 0; i < viewGroup.getChildCount(); i++) {
+                View child = viewGroup.getChildAt(i);
+                if (child.getVisibility() != View.VISIBLE) continue;
+
+                // Ensure child is measured
+                if (child.getMeasuredWidth() <= 0 || child.getMeasuredHeight() <= 0) {
+                    child.measure(
+                        View.MeasureSpec.makeMeasureSpec(viewGroup.getWidth(), View.MeasureSpec.AT_MOST),
+                        View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+                    );
+                }
+
+                // Get child's bottom position
+                int childBottom = child.getTop() + child.getMeasuredHeight();
+
+                // Add margins if any
+                if (child.getLayoutParams() instanceof ViewGroup.MarginLayoutParams) {
+                    ViewGroup.MarginLayoutParams params = (ViewGroup.MarginLayoutParams) child.getLayoutParams();
+                    childBottom += params.bottomMargin;
+                }
+
+                totalHeight = Math.max(totalHeight, childBottom);
+
+                // Recursively check children of ViewGroups
+                if (child instanceof ViewGroup) {
+                    int childGroupHeight = calculateTotalHeight((ViewGroup) child);
+                    totalHeight = Math.max(totalHeight, child.getTop() + childGroupHeight);
+                }
+            }
+
+            // Add padding
+            totalHeight += viewGroup.getPaddingTop() + viewGroup.getPaddingBottom();
+
+            // Ensure we don't return something smaller than the current height
+            return Math.max(totalHeight, viewGroup.getHeight());
+        } catch (Exception e) {
+            Log.e(TAG, "Error calculating ViewGroup height: " + e.getMessage());
+            return viewGroup.getHeight();
         }
+    }
 
-        // special case, just save RAW ARGB array without any compression
-        if (Formats.RAW == this.format && os instanceof ReusableByteArrayOutputStream) {
-            final int total = w * h * ARGB_SIZE;
-            final ReusableByteArrayOutputStream rbaos = cast(os);
-            bitmap.copyPixelsToBuffer(rbaos.asBuffer(total));
-            rbaos.setSize(total);
-        } else {
-            final Bitmap.CompressFormat cf = Formats.mapping[this.format];
+    /**
+     * Capture content of a ViewGroup, handling the case when the content is taller than the visible area
+     */
+    private void captureViewGroupContent(ViewGroup viewGroup, Canvas canvas, int width, int height) {
+        try {
+            // First try direct draw
+            int saveCount = canvas.save();
+            try {
+                viewGroup.draw(canvas);
+            } catch (Exception e) {
+                Log.e(TAG, "Error in direct ViewGroup draw: " + e.getMessage());
 
-            bitmap.compress(cf, (int) (100.0 * quality), os);
+                // If direct draw fails, draw each child individually
+                for (int i = 0; i < viewGroup.getChildCount(); i++) {
+                    View child = viewGroup.getChildAt(i);
+                    if (child.getVisibility() != View.VISIBLE) continue;
+
+                    int childSaveCount = canvas.save();
+                    canvas.translate(child.getLeft(), child.getTop());
+
+                    try {
+                        // Try to draw the child
+                        child.draw(canvas);
+
+                        // If the child is a ViewGroup and extends beyond the visible area
+                        if (child instanceof ViewGroup &&
+                            (child.getTop() + child.getHeight() > viewGroup.getHeight())) {
+                            captureViewGroupContent((ViewGroup) child, canvas, child.getWidth(), height - child.getTop());
+                        }
+                    } catch (Exception ce) {
+                        Log.e(TAG, "Error drawing child: " + ce.getMessage());
+                    }
+
+                    canvas.restoreToCount(childSaveCount);
+                }
+            }
+            canvas.restoreToCount(saveCount);
+        } catch (Exception e) {
+            Log.e(TAG, "Error capturing ViewGroup content: " + e.getMessage());
         }
-
-        recycleBitmap(bitmap);
-
-        return resolution; // return image width and height
     }
 
     /**
@@ -528,7 +787,9 @@ public class ViewShot implements UIBlock, com.facebook.react.fabric.interop.UIBl
     /**
      * Return bitmap to set of available.
      */
-    private static void recycleBitmap(@NonNull final Bitmap bitmap) {
+    private static void recycleBitmap(@Nullable final Bitmap bitmap) {
+        if (bitmap == null) return;
+
         synchronized (guardBitmaps) {
             weakBitmaps.add(bitmap);
         }
@@ -635,5 +896,58 @@ public class ViewShot implements UIBlock, com.facebook.react.fabric.interop.UIBl
 
     }
     //endregion
+
+    private void captureViewOld(final View view, final Bitmap bitmap) {
+        try {
+            // Original capture method
+            final Canvas canvas = new Canvas(bitmap);
+
+            // Handle background
+            final Drawable background = view.getBackground();
+            if (background != null) {
+                background.draw(canvas);
+            } else {
+                canvas.drawColor(Color.TRANSPARENT);
+            }
+
+            view.draw(canvas);
+        } catch (Exception e) {
+            Log.e(TAG, "Error in captureViewOld: " + e.getMessage());
+            // At least try to draw something
+            try {
+                Canvas canvas = new Canvas(bitmap);
+                canvas.drawColor(Color.WHITE);
+            } catch (Exception ignored) {
+                // Nothing more we can do
+            }
+        }
+    }
+
+    /**
+     * Helper method to force layout of all children in a ViewGroup
+     */
+    private void forceLayoutAllChildren(ViewGroup viewGroup) {
+        for (int i = 0; i < viewGroup.getChildCount(); i++) {
+            View child = viewGroup.getChildAt(i);
+            if (child.getVisibility() != View.VISIBLE) continue;
+
+            // Get the child's measured dimensions
+            int childWidth = child.getMeasuredWidth();
+            int childHeight = child.getMeasuredHeight();
+
+            // Skip invalid measurements
+            if (childWidth <= 0 || childHeight <= 0) continue;
+
+            // Force layout at the child's proper position
+            child.layout(child.getLeft(), child.getTop(),
+                         child.getLeft() + childWidth,
+                         child.getTop() + childHeight);
+
+            // Recursively layout child ViewGroups
+            if (child instanceof ViewGroup) {
+                forceLayoutAllChildren((ViewGroup) child);
+            }
+        }
+    }
 
 }
